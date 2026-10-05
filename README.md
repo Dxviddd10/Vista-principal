@@ -1,327 +1,795 @@
 ﻿# Panel-gestion
-// Tipos principales basados en la estructura de MongoDB
+import useSWR, { useSWRConfig } from 'swr';
+import useSWRInfinite from "swr/infinite";
+import {
+    mockSourceRequests,
+    mockUsers,
+    mockAuditLogs,
+    getSourceRequestById,
+    delay,
+    currentUser,
+} from '@/lib/mock-data';
+import { apiClient } from '@/lib/api-client';
+import { useEffect, useMemo } from 'react';
+import { EstadoMerge, SolicitudNomenclatura } from '@/lib/types';
 
-// Roles de usuario
-export type RolUsuario = 'admin' | 'lead' | 'devops' | 'developer' | 'viewer' | 'desactivado';
+// Mock mode enabled - simulates API calls
+const MOCK_DELAY = 300;
 
-// Estados de rama
-export type EstadoRama = 'desarrollo' | 'validacion' | 'certificacion' | 'produccion';
+// Fetcher que simula delay de API
+const mockFetcher = async <T>(data: T): Promise<T> => {
+    await delay(MOCK_DELAY);
+    return data;
+};
 
-// Tipos de rama
-export type TipoRama = 'main' | 'desarrollo' | 'test' | 'produccion' | 'requerimiento' | 'incidente';
+const normalizeSolicitudId = (id: string) => id.replace(/^req-/i, '');
 
-// Estados de repositorio
-export type EstadoRepositorio = 'active' | 'deprecated' | 'frozen';
+// ==================== DASHBOARD ====================
 
-// Estados de elemento AS400
-export type EstadoElemento = '0' | '1' | '2' | '9'; // 0-uso, 1-proceso, 2-terminado, 9-eliminado
+export function useDashboardStats() {
+    const { data, error, isLoading, mutate } = useSWR(
+        'dashboard-stats',
+        () => apiClient.getDashboardStats(),
+        { refreshInterval: 30000 }
+    );
 
-// Clase de modificacion
-export type ClaseModificacion = 'M' | 'C' | 'N' | 'V'; // M-modificacion, C-compilacion, N-nivelacion, V-nuevo
-
-// Estados de merge request
-export type EstadoMerge = 'pendiente' | 'aprobado' | 'rechazado' | 'fusionado';
-
-// Regla de repositorio
-export interface RepoRegla {
-  regla: string;
-  valor: boolean;
+    return {
+        stats: data,
+        isLoading,
+        error,
+        refresh: mutate
+    };
 }
 
-// Repositorio
-export interface Repositorio {
-  _id: string;
-  gitlab_id: number;
-  namespace_id: number;
-  name: string;
-  path: string;
-  description: string;
-  usuario_responsable: string;
-  FechaCreacion: string;
-  FechaUltimaActividad: string;
-  status: EstadoRepositorio;
-  reglas: RepoRegla[];
+export function useActividadReciente(limit = 10) {
+    const { data, error, isLoading, mutate } = useSWR(
+        `actividad-${limit}`,
+        () => apiClient.getActividadReciente(limit),
+        { refreshInterval: 15000 }
+    );
+
+    return {
+        actividad: data || [],
+        isLoading,
+        error,
+        refresh: mutate
+    };
 }
 
-// Restricciones de merge
-export interface MergeRestrictions {
-  requires_review: boolean;
-  min_approvals: number;
-  restricted_to_roles: string[];
+// ==================== REPOSITORIOS ====================
+
+export function useRepositorios(
+    nombre?: string,
+    cliente?: string
+) {
+    const { mutate: globalMutate } = useSWRConfig();
+
+    const getKey = (pageIndex: number, previousPageData: any) => {
+        if (previousPageData && !previousPageData.data.length) return null;
+
+        if (pageIndex === 0) {
+            return ["repositorios", nombre || "", cliente || ""];
+        }
+
+        return [
+            "repositorios",
+            nombre || "",
+            cliente || "",
+            previousPageData.last_id
+        ];
+    };
+
+    const {
+        data,
+        error,
+        isLoading,
+        size,
+        setSize,
+        mutate
+    } = useSWRInfinite(
+        getKey,
+        (key) => {
+            const [, nombre, cliente, last_id] = key;
+
+            return apiClient.getRepositorios(
+                nombre,
+                cliente,
+                last_id
+            );
+        }
+    );
+
+    const repositorios = useMemo(() => {
+        return data ? data.flatMap((page) => page.data) : [];
+    }, [data]);
+
+    const total = repositorios.length;
+
+    const isLoadingMore =
+        isLoading ||
+        (size > 0 &&
+            data &&
+            typeof data[size - 1] === "undefined");
+
+    const isEmpty = data?.[0]?.data?.length === 0;
+
+    const isReachingEnd =
+        isEmpty ||
+        (data &&
+            data[data.length - 1]?.data.length === 0);
+
+    useEffect(() => {
+        repositorios.forEach((repo: any) => {
+            globalMutate(`repo-${repo.gitlabId}`, repo, false);
+        });
+    }, [repositorios, globalMutate]);
+
+    return {
+        repositorios,
+        total,
+        error,
+        isLoading,
+        isLoadingMore,
+        isReachingEnd,
+        loadMore: () => setSize(size + 1),
+        refresh: mutate
+    };
 }
 
-// Rama
-export interface Rama {
-  _id: string;
-  repo_id: string;
-  gitlab_id: number;
-  name: string;
-  mailusuario: string;
-  fechacreacion: string;
-  merge_restrictions: MergeRestrictions;
-  estado: EstadoRama;
-  tipoderama: TipoRama;
-  cliente: string;
-  solicitud: number;
-  fase_actual: string;
-  checklist_aprobada: boolean;
-  solicitudprincipal?: number;
+export function useRepositorio(id: string | null) {
+    const { data, error, isLoading, mutate } = useSWR(
+        id ? ["repositorio", id] : null,
+        ([_, repoId]) => apiClient.getRepositorio(repoId)
+    );
+
+    return {
+        repositorio: data?.data ?? [],
+        isLoading,
+        error: error || data?.error || null,
+        refresh: mutate
+    };
 }
 
-// Permisos de usuario
-export interface Permisos {
-  can_create_repo: boolean;
-  can_merge: boolean;
-  restricted_branches: string[];
+export function useRepositorioRamas(
+    repoId: string | null,
+    filtros?: {
+        tipoderama?: string;
+        estado?: string;
+    }
+) {
+    const { data, error, isLoading, mutate } = useSWR(
+        repoId ? ["ramas", repoId] : null,
+        async ([, id]) => await apiClient.getRepositorioRamas(id)
+    );
+
+    let ramas = data?.data || [];
+
+    if (filtros?.tipoderama) {
+        ramas = ramas.filter(
+            (rama: any) =>
+                rama.tipo_de_rama === filtros.tipoderama
+        );
+    }
+
+    if (filtros?.estado) {
+        ramas = ramas.filter(
+            (rama: any) =>
+                rama.estado === filtros.estado
+        );
+    }
+
+    return {
+        ramas,
+        total: ramas.length,
+        isLoading,
+        error: error || data?.error || null,
+        refresh: mutate
+    };
 }
 
-// Usuario
-export interface Usuario {
-  _id: string;
-  username: string;
-  name: string;
-  email: string;
-  codigo_as400?: string;
-  area: string;
-  rol: RolUsuario;
-  gitlab_id: number;
-  permisos: Permisos;
-  ultimologin: string;
+export function useRepositorioCommits(
+    repoId: string | null,
+    rama?: string,
+    page = 1,
+    limit = 5
+) {
+    const { data, error, isLoading, mutate } = useSWR(
+        repoId && rama ? [`commits`, repoId, rama, page] : null,
+        async ([, id, branch, p]) =>
+            await apiClient.getRepositorioCommits(id, branch, p)
+    );
+
+    return {
+        commits: data?.data || [],
+        total: data?.total || 0,
+        totalPages: 1,
+        isLoading,
+        error,
+        refresh: mutate
+    };
 }
 
-// Relacion de fuentes
-export interface RelacionFuente {
-  _id?: string;
-  fuenteemisor: string;
-  gitlab_id_emisor: string;
-  tipoEmi: 'as400' | 'grafico';
-  claseEmi: string;
-  fuentedependiente: string;
-  gitlab_id_dependiente: string;
-  tipoDep: 'as400' | 'grafico';
-  claseDep: string;
-  descripcionrelacion: string;
+// ==================== COMMITS INFINITO ====================
+
+export function useRepositorioCommitsInfinite(
+    repoId: string,
+    branch?: string
+
+) {
+    const COMMITS_PER_PAGE = 5;
+
+    const getKey = (pageIndex: number, previousPageData: any) => {
+        if (!repoId || repoId === 'undefined') return null;
+        if (previousPageData && previousPageData.data?.length === 0) return null;
+        if (previousPageData && previousPageData.data?.length < COMMITS_PER_PAGE) return null;
+        return ['commits-infinite', repoId, branch, pageIndex + 1];
+    };
+
+    const { data, error, isLoading, size, setSize, isValidating } = useSWRInfinite(
+        getKey,
+        async ([, id, br, page]) => {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+
+            return await apiClient.getRepositorioCommits(
+                String(id),
+                String(br),
+                Number(page)
+            );
+        });
+
+    const commits = data ? data.flatMap((p) => p.data ?? []) : [];
+    const isEmpty = data?.[0]?.data?.length === 0;
+    const isReachingEnd =
+        isEmpty ||
+        (data != null && (data[data.length - 1]?.data?.length ?? 0) < COMMITS_PER_PAGE);
+    const isLoadingMore = isValidating && size > 1 && !isLoading;
+
+    const loadMore = () => {
+        if (isLoadingMore || isReachingEnd) return;
+        setSize(size + 1);
+    };
+
+    return {
+        commits,
+        isLoading,
+        isLoadingMore,
+        isReachingEnd,
+        isEmpty,
+        error,
+        loadMore,
+        totalLoaded: commits.length,
+
+    };
 }
 
-// Z01 AS400 - Solicitud de fuentes
-export interface Z01AS400 {
-  Z01NSO: string; // numero de solicitud
-  Z01IDR: string; // numero de idr
-  Z01PID: string; // Punto de idr
-  Z01NEL: string; // Nombre de elemento o programa
-  Z01SRC: string; // Archivo fuente
-  Z01EST: EstadoElemento; // Estado del elemento
-  Z01CLA: ClaseModificacion; // Clase de modificacion
-  Z01I01?: string; // chequeo proceso 1
-  Z01I02?: string;
-  Z01I03?: string;
-  Z01I04?: string;
-  Z01I05?: string;
-  Z01I06?: string;
-  Z01I07?: string;
-  Z01I08?: string;
-  Z01I09?: string;
-  Z01I10?: string;
-  Z01I11?: string;
-  Z01I12?: string;
-  Z01I13?: string;
-  Z01I14?: string;
-  Z01I15?: string;
-  Z01USC: string; // Usuario quien creo o modifico
-  Z01FEC: string; // Fecha
-  Z01HOR: string; // Hora
+
+// ==================== MERGE REQUESTS ====================
+
+export function useMergeRequests(
+    filtros?: {
+        estado?: string;
+        rama_destino?: string;
+        nombre_repo?: string;
+    }
+) {
+
+    const getKey = (
+        pageIndex: number,
+        previousPageData: any
+    ) => {
+        if (
+            previousPageData &&
+            !previousPageData.data.length
+        ) {
+            return null;
+        }
+
+        if (pageIndex === 0) {
+            return {
+                estado: filtros?.estado,
+                rama_destino: filtros?.rama_destino,
+                nombre_repo: filtros?.nombre_repo,
+                last_id: undefined
+            };
+        }
+
+        return {
+            estado: filtros?.estado,
+            rama_destino: filtros?.rama_destino,
+            nombre_repo: filtros?.nombre_repo,
+            last_id: previousPageData.last_id
+        };
+    };
+
+    const {
+        data,
+        error,
+        isLoading,
+        size,
+        setSize,
+        mutate
+    } = useSWRInfinite(
+        getKey,
+        async (params) => {
+
+            return apiClient.getMergeRequests(
+                {
+                    estado: params.estado as EstadoMerge,
+                    rama_destino: params.rama_destino,
+                    repo_nombre: params.nombre_repo
+                },
+                params.last_id
+            );
+
+        }
+    );
+
+    const mergeRequests = useMemo(() => {
+
+        return data
+            ? data.flatMap(
+                (page) => page.data || []
+            )
+            : [];
+
+    }, [data]);
+
+    const total =
+        data?.[0]?.total || 0;
+
+    const isLoadingMore =
+        isLoading ||
+        (
+            size > 0 &&
+            data &&
+            typeof data[size - 1] === 'undefined'
+        );
+
+    const isEmpty =
+        data?.[0]?.data?.length === 0;
+
+    const isReachingEnd =
+        isEmpty ||
+        (
+            data &&
+            data[data.length - 1]?.data.length === 0
+        );
+
+    return {
+        mergeRequests,
+        total,
+        error,
+        isLoading,
+        isLoadingMore,
+        isReachingEnd,
+
+        loadMore: () => setSize(size + 1),
+
+        refresh: mutate
+    };
 }
 
-// Z04 AS400 - Catalogo de elementos
-export interface Z04AS400 {
-  Z04NEL: string; // Nombre del elemento
-  Z04SRC: string; // Archivo fuente
-  Z04TIP: string; // Tipo de elemento
-  Z04DES: string; // Descripcion
-  Z04FEC: string; // Fecha de creacion del elemento
-  Z04NFU: string; // Numero asignado fuente
-  Z04NVR: string; // Numero de version
-  Z04REU: string; // Ultimo requerimiento utilizdo
-  Z04FEU: string; // Fecha de asignacion
-  Z04FME: string; // Fecha de merchado
-  Z04EST: '1' | '2' | '3' | '4'; // Estado: 1-libre, 2-ocupado, 3-merch emergencia, 4-eliminado
+export function useMergeRequest(
+    id: string | null
+) {
+    const {
+        data,
+        error,
+        isLoading,
+        mutate
+    } = useSWR(
+        id
+            ? ['merge-request', id]
+            : null,
+
+        async () => {
+            const response =
+                await apiClient.getMergeRequest(id!);
+
+            return response;
+        }
+    );
+
+    return {
+        mergeRequest: data,
+        isLoading,
+        error,
+        refresh: mutate
+    };
 }
 
-// Commit de GitLab
-export interface Commit {
-  id: string;
-  short_id: string;
-  title: string;
-  message: string;
-  author_name: string;
-  author_email: string;
-  authored_date: string;
-  committed_date: string;
-  web_url?: string;
-  stats?: {
-    additions: number;
-    deletions: number;
-    total: number;
-  };
+// ==================== SOLICITUDES ====================
+
+export function useSolicitudes(
+    search = '',
+    estado = '',
+    tipo = ''
+) {
+    const { mutate: globalMutate } = useSWRConfig();
+
+    const getKey = (pageIndex: number, previousPageData: any) => {
+        if (previousPageData && previousPageData.data.length === 0) return null;
+        return ['solicitudes', search || '', estado || '', tipo || '', pageIndex + 1];
+    };
+
+    const { data, error, isLoading, size, setSize, mutate, isValidating } = useSWRInfinite(
+        getKey,
+        async ([, searchQuery, estadoQuery, tipoQuery, page]) => {
+            const response = await apiClient.getSolicitudes();
+
+            if (response.error) {
+                throw new Error(response.error);
+            }
+
+            let solicitudes = response.data || [];
+            const searchLower = (searchQuery || '').toString().toLowerCase();
+
+            if (estadoQuery) {
+                solicitudes = solicitudes.filter((s: any) => s.estado === estadoQuery);
+            }
+            if (tipoQuery) {
+                solicitudes = solicitudes.filter((s: any) => s.tipo === tipoQuery);
+            }
+            if (searchLower) {
+                solicitudes = solicitudes.filter((s: any) =>
+                    (s.numeroSolicitud?.toString().toLowerCase() || '').includes(searchLower) ||
+                    (s.descripcion || '').toLowerCase().includes(searchLower) ||
+                    (s.cliente || '').toLowerCase().includes(searchLower)
+                );
+            }
+
+            const pageNumber = Number(page) || 1;
+            const limit = 20;
+            const start = (pageNumber - 1) * limit;
+            const pageData = solicitudes.slice(start, start + limit);
+
+            return {
+                data: pageData,
+                total: solicitudes.length,
+                page: pageNumber,
+                limit,
+                totalPages: Math.max(1, Math.ceil(solicitudes.length / limit))
+            };
+        }
+    );
+
+    const solicitudes = useMemo(() => {
+        return data ? data.flatMap((page) => page.data) : [];
+    }, [data]);
+
+    const total = solicitudes.length;
+
+    const isLoadingMore =
+        isLoading ||
+        (size > 0 &&
+            data &&
+            typeof data[size - 1] === 'undefined');
+
+    const isEmpty = data?.[0]?.data?.length === 0;
+
+    const isReachingEnd =
+        isEmpty ||
+        (data &&
+            data[data.length - 1]?.data.length === 0);
+
+    useEffect(() => {
+        solicitudes.forEach((soli: any) => {
+            globalMutate(`soli-${soli.numeroSolicitud}`, soli, false);
+        });
+    }, [solicitudes, globalMutate]);
+
+    return {
+        solicitudes,
+        total,
+        error,
+        isLoading,
+        isLoadingMore,
+        isReachingEnd,
+        loadMore: () => setSize(size + 1),
+        refresh: mutate
+    };
 }
 
-// Merge Request
-export interface MergeRequest {
-  _id: string;
-  gitlab_mr_id?: number;
-  repo_id: string;
-  repositorio_nombre?: string;
-  rama_origen: string;
-  rama_destino: string;
-  titulo: string;
-  descripcion: string;
-  solicitante: string;
-  solicitante_nombre?: string;
-  estado: EstadoMerge;
-  fecha_solicitud: string;
-  fecha_aprobacion?: string;
-  aprobado_por?: string;
-  aprobado_por_nombre?: string;
-  comentarios?: string;
-  solicitud_numero?: number;
-  cambios?: CambioArchivo[];
+export function useSolicitud(id: string | null) {
+    const normalizedId = id ? normalizeSolicitudId(id) : null;
+    const { data, error, isLoading, mutate } = useSWR(
+        normalizedId ? `solicitud-${normalizedId}` : null,
+        async () => {
+            if (!normalizedId) return null;
+
+            const response = await apiClient.getSolicitud(normalizedId);
+            let solicitud = response.data;
+
+            if (!solicitud) {
+                solicitud = await mockFetcher(getSourceRequestById(normalizedId));
+            }
+
+            if (!solicitud) return null;
+
+            // Transformar estructura de fuentes para coincidir con la UI esperada
+            // y mapear propiedades del mock/endpoint a lo que espera el componente
+            return {
+                ...solicitud,
+                numero_solicitud: solicitud.numeroSolicitud,
+                rama_asociada: solicitud.ramaAsignada,
+                desarrollador: solicitud.desarrolladorId,
+                fuentes: (solicitud.fuentesSolicitadas || []).map((fuente: any) => ({
+                    nombre: fuente.nombre,
+                    tipo: fuente.tipo,
+                    estado: fuente.estado,
+                    accion: (fuente.tipo === 'nuevo' ? 'crear' : 'modificar') as 'crear' | 'modificar',
+                    clase: fuente.tipo === 'nuevo' ? 'N' : 'M'
+                }))
+            };
+        }
+    );
+
+    return {
+        solicitud: data,
+        isLoading,
+        error,
+        refresh: mutate
+    };
 }
 
-// Cambio en archivo (para diff)
-export interface CambioArchivo {
-  old_path: string;
-  new_path: string;
-  new_file: boolean;
-  renamed_file: boolean;
-  deleted_file: boolean;
-  diff: string;
+// ==================== USUARIOS ====================
+
+export function useUsuarios(page = 1, limit = 50) {
+    const { data, error, isLoading, mutate } = useSWR(
+        `usuarios-${page}-${limit}`,
+        async () => {
+            await delay(MOCK_DELAY);
+            const start = (page - 1) * limit;
+            return {
+                data: mockUsers.slice(start, start + limit),
+                total: mockUsers.length,
+                page,
+                limit,
+                totalPages: Math.ceil(mockUsers.length / limit)
+            };
+        }
+    );
+
+    return {
+        usuarios: data?.data || [],
+        total: data?.total || 0,
+        totalPages: data?.totalPages || 0,
+        isLoading,
+        error,
+        refresh: mutate
+    };
 }
 
-// Version/Tag del repositorio
-export interface Version {
-  name: string;
-  message: string;
-  commit: {
-    id: string;
-    short_id: string;
-    title: string;
-    created_at: string;
-    author_name: string;
-  };
-  release?: {
-    tag_name: string;
-    description: string;
-  };
-  created_at: string;
+export function useCurrentUser() {
+    const { data, error, isLoading } = useSWR(
+        'current-user',
+        () => mockFetcher(currentUser)
+    );
+
+    return {
+        user: data,
+        isLoading,
+        error
+    };
 }
 
-// Solicitud de nomenclatura
-export interface SolicitudNomenclatura {
-  numero_solicitud?: string;
-  codigo_as400: string;
-  cliente?: string;
-  tipo_solicitud?: string;
-  descripcion?: string;
-  fuentes?: Array<{
-    accion: 'crear' | 'modificar';
-    nombre: string;
-    tipo: string;
-    clase: string;
-  }>;
-  tipo_fuente?: string;
+// ==================== AUDIT LOGS ====================
+
+export function useAuditLogs(filtros?: { entidad?: string; accion?: string }, page = 1, limit = 50) {
+    const { data, error, isLoading, mutate } = useSWR(
+        `audit-${JSON.stringify(filtros)}-${page}-${limit}`,
+        async () => {
+            await delay(MOCK_DELAY);
+            let logs = [...mockAuditLogs];
+
+            if (filtros?.entidad) {
+                logs = logs.filter(l => l.entidad === filtros.entidad);
+            }
+            if (filtros?.accion) {
+                logs = logs.filter(l => l.accion === filtros.accion);
+            }
+
+            const start = (page - 1) * limit;
+            return {
+                data: logs.slice(start, start + limit),
+                total: logs.length
+            };
+        }
+    );
+
+    return {
+        logs: data?.data || [],
+        total: data?.total || 0,
+        isLoading,
+        error,
+        refresh: mutate
+    };
 }
 
-export interface RespuestaNomenclatura {
-  nombre: string;
-  numero: number;
-}
+// ==================== ACCIONES MOCK ====================
 
-// Solicitud de fuente normalizada al formato camelCase que consumen las vistas
-export interface SolicitudFuente {
-  id: string;
-  numeroSolicitud: number;
-  tipo: 'requerimiento' | 'incidente';
-  cliente: string;
-  descripcion: string;
-  fuentesSolicitadas: FuenteSolicitada[];
-  estado: 'pendiente' | 'en_desarrollo' | 'validacion' | 'test' | 'produccion' | 'completado';
-  desarrolladorId: string;
-  fechaCreacion: string;
-  updatedAt: string;
-  ramaAsignada?: string;
-  repositorioId?: string;
-}
+export const dataActions = {
+    async aprobarMerge(id: string, comentarios?: string) {
+        await delay(500);
+        console.log('[MOCK] Aprobar merge:', id, comentarios);
+        return { success: true, message: 'Merge aprobado exitosamente' };
+    },
 
-export interface FuenteSolicitada {
-  nombre: string;
-  tipo: string;
-  clase: string;
-  accion: 'crear' | 'modificar';
-  estado: EstadoElemento;
-}
+    async rechazarMerge(id: string, comentarios: string) {
+        await delay(500);
+        console.log('[MOCK] Rechazar merge:', id, comentarios);
+        return { success: true, message: 'Merge rechazado' };
+    },
 
-// Dashboard stats
-export interface DashboardStats {
-  total_commits: number;
-  total_merges_aprobados: number;
-  total_ramas_creadas: number;
-  desde?: string;
-  hasta?: string;
-}
+    async crearMergeRequest(data: {
+        repositorioId: string;
+        ramaOrigen: string;
+        ramaDestino: string;
+        titulo: string;
+        descripcion?: string;
+    }) {
+        await delay(500);
+        return { success: true, data: { id: 'mr-new-' + Date.now() } };
+    },
 
-// Actividad reciente
-export interface ActividadReciente {
-  tipo: 'commit' | 'merge' | 'solicitud' | 'rollback';
-  descripcion: string;
-  usuario: string;
-  fecha: string;
-  proyecto_id: number;
-}
+    async ejecutarRollback(repoId: string, data: { rama: string; commitSha: string; motivo: string }) {
+        return await apiClient.ejecutarRollback(repoId, data);
+    },
 
-// Response wrapper del API
-export interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  message?: string;
-}
+    async previewRollback(repoId: string, rama: string, commitSha: string) {
+        return await apiClient.previewRollback(repoId, rama, commitSha);
+    },
 
-// Paginacion
-export interface PaginatedResponse<T> {
-  data: T[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-  error?: string;
-}
+    async actualizarRolUsuario(id: string, rol: string) {
+        await delay(500);
+        console.log('[MOCK] Actualizar rol:', id, rol);
+        return { success: true, message: 'Rol actualizado' };
+    },
 
-// Filtros comunes
-export interface FiltrosRepositorio {
-  status?: EstadoRepositorio;
-  cliente?: string;
-  responsable?: string;
-  search?: string;
-}
+    async crearRama(data: { repositorioId: string; nombre: string; ramaBase: string }) {
+        await delay(500);
+        console.log('[MOCK] Crear rama:', data);
+        return { success: true, data: { id: 'branch-new-' + Date.now() } };
+    },
 
-export interface FiltrosMerge {
-  estado?: EstadoMerge;
-  rama_destino?: string;
-  repo_nombre?: string;
-}
+    async crearSolicitud(data: {
+        numeroSolicitud?: string | number;
+        tipo?: string;
+        cliente?: string;
+        descripcion?: string;
+        fuentes?: Array<{
+            nombre: string;
+            tipo: string;
+            clase: string;
+            accion: 'crear' | 'modificar';
+            estado?: string;
+        }>;
+    }) {
+        try {
+            const response = await apiClient.crearSolicitud(
+                String(data.numeroSolicitud ?? ''),
+                data.tipo ?? 'requerimiento',
+                data.cliente ?? '',
+                data.descripcion ?? '',
+                data.fuentes
+            );
 
-export interface FiltrosRama {
-  estado?: EstadoRama;
-  tipoderama?: TipoRama;
-  cliente?: string;
-}
+            if (response?.success && response?.data) {
+                return { success: true, data: response.data };
+            }
 
-// Session user extendido
-export interface SessionUser {
-  id: string;
-  name: string;
-  email: string;
-  rol: RolUsuario;
-  permisos: Permisos;
-  username: string;
-}
+            return {
+                success: false,
+                data: null,
+                error: response?.error || 'Error al crear la solicitud'
+            };
+        } catch (error: any) {
+            return {
+                success: false,
+                data: null,
+                error: error?.message || 'Error al crear la solicitud'
+            };
+        }
+    },
+
+    async procesarFuentes(data: {
+        numeroSolicitud: string | number;
+        codigoAS400: string;
+        cliente: string;
+        tipoSolicitud: string;
+        descripcion: string;
+        fuentes: Array<{
+            accion: 'crear' | 'modificar';
+            nombre: string;
+            tipo: string;
+            clase: string;
+        }>;
+    }) {
+        try {
+            const response = await apiClient.procesarFuentes({
+                numero_solicitud: String(data.numeroSolicitud ?? ''),
+                codigo_as400: data.codigoAS400,
+                cliente: data.cliente,
+                tipo_solicitud: data.tipoSolicitud,
+                descripcion: data.descripcion,
+                fuentes: data.fuentes
+            });
+
+            if (response?.success && response?.data) {
+                const fuentesConErrores = response.data?.fuentes_con_errores ?? [];
+
+                if (Array.isArray(fuentesConErrores) && fuentesConErrores.length > 0) {
+                    return {
+                        success: false,
+                        data: response.data,
+                        error: fuentesConErrores[0]?.error || 'Una o mas fuentes presentaron errores al procesarse'
+                    };
+                }
+
+                return { success: true, data: response.data };
+            }
+
+            return {
+                success: false,
+                data: null,
+                error: response?.error || 'Error al procesar las fuentes'
+            };
+        } catch (error: any) {
+            return {
+                success: false,
+                data: null,
+                error: error?.message || 'Error al procesar las fuentes'
+            };
+        }
+    },
+
+    async solicitarNomenclatura(data: SolicitudNomenclatura) {
+        try {
+            const response = await apiClient.procesarFuentes({
+                numero_solicitud: String(data.numero_solicitud ?? ''),
+                codigo_as400: data.codigo_as400,
+                cliente: String(data.cliente ?? ''),
+                tipo_solicitud: data.tipo_solicitud ?? 'requerimiento',
+                descripcion: data.descripcion ?? '',
+                fuentes: data.fuentes ?? []
+            });
+
+            if (response?.success && response?.data) {
+                const fuentesExitosas = response.data?.fuentes_exitosas ?? [];
+                const fuentesConErrores = response.data?.fuentes_con_errores ?? [];
+
+                if (Array.isArray(fuentesConErrores) && fuentesConErrores.length > 0) {
+                    return {
+                        success: false,
+                        data: null,
+                        error: fuentesConErrores[0]?.error || response.data?.message || 'Error al procesar fuentes'
+                    };
+                }
+
+                const fuente = Array.isArray(fuentesExitosas) && fuentesExitosas.length > 0
+                    ? fuentesExitosas[0]
+                    : null;
+
+                return {
+                    success: true,
+                    data: {
+                        nombre: fuente?.nombre || fuente?.fuente || data.fuentes?.[0]?.nombre || ''
+                    }
+                };
+            }
+
+            return {
+                success: false,
+                data: null,
+                error: response?.error || 'Error al procesar fuentes'
+            };
+        } catch (error: any) {
+            return {
+                success: false,
+                data: null,
+                error: error?.message || 'Error al procesar fuentes'
+            };
+        }
+    }
+};
+
