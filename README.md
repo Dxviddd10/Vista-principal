@@ -1,12 +1,15 @@
 'use client';
 
-import { useMemo, useEffect } from 'react';
-import Link from 'next/link';
-import { useSolicitudes } from '@/hooks/use-data';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { useMemo, useState } from 'react';
+import { useActividadReciente } from '@/hooks/use-data';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -14,160 +17,113 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { FileText, Search, ArrowRight } from 'lucide-react';
+import { GitCommit, GitMerge, FileText, Clock } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { useState } from 'react';
-import { advancedMatch } from '@/utils/filtered';
 
-const estadosSolicitud: Record<string, { label: string; color: string; bgColor: string }> = {
-  pendiente_autorizacion: { label: 'Pendiente', color: 'text-gray-700', bgColor: 'bg-gray-100' },
-  en_desarrollo: { label: 'En Desarrollo', color: 'text-blue-700', bgColor: 'bg-blue-100' },
-  en_test: { label: 'En Test', color: 'text-purple-700', bgColor: 'bg-purple-100' },
-  completado: { label: 'Completado', color: 'text-green-700', bgColor: 'bg-green-100' },
+// IMPORTANTE: apiClient.getActividadReciente(limit) hoy solo acepta un
+// límite, no un rango de días — así que pedimos un límite alto y
+// filtramos por fecha aquí en el cliente. Si el volumen de actividad
+// crece mucho, esto debería moverse al backend (igual que hablamos para
+// solicitudes). Repórtalo a tu equipo como pendiente.
+const HISTORY_FETCH_LIMIT = 200;
+const dayOptions = [3, 5, 7];
+
+const tipoIcons: Record<string, React.ElementType> = {
+  commit: GitCommit,
+  merge: GitMerge,
+  solicitud: FileText,
+  rollback: Clock,
 };
 
-const estadoOptions = [
-  { value: 'all', label: 'Todos' },
-  { value: 'pendiente_autorizacion', label: 'Pendiente' },
-  { value: 'en_desarrollo', label: 'Desarrollo' },
-  { value: 'en_test', label: 'Test' },
-  { value: 'completado', label: 'Completado' },
-];
+const tipoLabels: Record<string, string> = {
+  commit: 'Commits',
+  merge: 'Merges',
+  solicitud: 'Solicitudes',
+  rollback: 'Rollbacks',
+};
 
-// Recibe refreshSignal desde el dashboard: cuando ese número cambia,
-// esta tarjeta vuelve a pedir sus propios datos (tiene su propia
-// instancia de useSolicitudes, con sus propios filtros, separada de la
-// página de /solicitudes).
-export function FlujoDespliegueCard({ refreshSignal }: { refreshSignal: number }) {
-  const [searchInput, setSearchInput] = useState('');
-  const [searchApi, setSearchApi] = useState('');
-  const [estadoApi, setEstadoApi] = useState('');
+export function ActivityHistoryDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const [days, setDays] = useState(7);
+  const [tipo, setTipo] = useState('all');
+  const { actividad, isLoading } = useActividadReciente(HISTORY_FETCH_LIMIT);
 
-  const { solicitudes, total, isLoading, isLoadingMore, isReachingEnd, loadMore, refresh } =
-    useSolicitudes(searchApi, estadoApi, '');
-
-  useEffect(() => {
-    if (refreshSignal > 0) refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshSignal]);
-
-  const filtradas = useMemo(
-    () =>
-      solicitudes.filter(
-        (s: any) =>
-          advancedMatch(s.numeroSolicitud || '', searchInput) ||
-          advancedMatch(s.descripcion || '', searchInput),
-      ),
-    [solicitudes, searchInput],
-  );
-
-  function handleSearchSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setSearchApi(searchInput.trim());
-  }
-
-  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
-    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-    const nearBottom = scrollTop + clientHeight >= scrollHeight - 50;
-    if (nearBottom && !isLoadingMore && !isReachingEnd) loadMore();
-  }
+  const filtrada = useMemo(() => {
+    const since = Date.now() - days * 24 * 60 * 60 * 1000;
+    return actividad.filter((item) => {
+      const matchesDate = new Date(item.fecha).getTime() >= since;
+      const matchesTipo = tipo === 'all' || item.tipo === tipo;
+      return matchesDate && matchesTipo;
+    });
+  }, [actividad, days, tipo]);
 
   return (
-    <Card className="lg:col-span-2">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5 text-rose-600" />
-              Flujo de despliegues
-            </CardTitle>
-            <CardDescription>{total} solicitudes · cada una es un cambio en curso</CardDescription>
-          </div>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/solicitudes">
-              Ver todas <ArrowRight className="ml-1 h-3 w-3" />
-            </Link>
-          </Button>
-        </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[80vh] max-w-lg overflow-hidden">
+        <DialogHeader>
+          <DialogTitle>Historial de actividad</DialogTitle>
+          <DialogDescription>Revisa lo que ha pasado en el sistema por rango de fecha.</DialogDescription>
+        </DialogHeader>
 
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-          <form onSubmit={handleSearchSubmit} className="flex flex-1 gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Buscar..."
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-          </form>
-          <Select value={estadoApi || 'all'} onValueChange={(v) => setEstadoApi(v === 'all' ? '' : v)}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Estado" />
+        <div className="flex items-center justify-between gap-2 border-b pb-3">
+          <div className="flex gap-1 rounded-md bg-muted p-1">
+            {dayOptions.map((d) => (
+              <Button
+                key={d}
+                size="sm"
+                variant={days === d ? 'default' : 'ghost'}
+                className="h-7 px-2 text-xs"
+                onClick={() => setDays(d)}
+              >
+                {d} días
+              </Button>
+            ))}
+          </div>
+          <Select value={tipo} onValueChange={setTipo}>
+            <SelectTrigger className="w-[140px]">
+              <SelectValue placeholder="Tipo" />
             </SelectTrigger>
             <SelectContent>
-              {estadoOptions.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
+              <SelectItem value="all">Todos</SelectItem>
+              <SelectItem value="commit">Commits</SelectItem>
+              <SelectItem value="merge">Merges</SelectItem>
+              <SelectItem value="solicitud">Solicitudes</SelectItem>
+              <SelectItem value="rollback">Rollbacks</SelectItem>
             </SelectContent>
           </Select>
         </div>
-      </CardHeader>
 
-      <CardContent>
-        {isLoading ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">Cargando...</div>
-        ) : filtradas.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">
-            No hay solicitudes que coincidan.
-          </div>
-        ) : (
-          <div onScroll={handleScroll} className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-            {filtradas.map((s: any) => {
-              const estadoConfig = estadosSolicitud[s.estado] || estadosSolicitud.pendiente_autorizacion;
+        <div className="max-h-[50vh] space-y-3 overflow-y-auto">
+          {isLoading ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">Cargando...</div>
+          ) : filtrada.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              No hay eventos en los últimos {days} días con este filtro.
+            </div>
+          ) : (
+            filtrada.map((item, idx) => {
+              const Icon = tipoIcons[item.tipo] || GitCommit;
               return (
-                <Link
-                  key={s.id}
-                  href={`/solicitudes/${s.id}`}
-                  className="flex items-center justify-between gap-3 rounded-lg border p-3 transition-all hover:bg-muted/50"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{s.numeroSolicitud}</span>
-                      <Badge variant={s.tipo === 'incidente' ? 'destructive' : 'secondary'} className="text-[10px]">
-                        {s.tipo === 'incidente' ? 'Incidente' : 'Requerimiento'}
-                      </Badge>
-                    </div>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {s.cliente} · {s.descripcion}
+                <div key={idx} className="flex gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <Icon className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <p className="text-sm">
+                      <span className="font-medium">{item.usuario}</span>{' '}
+                      <span className="text-muted-foreground">{tipoLabels[item.tipo] || item.tipo}</span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatDistanceToNow(new Date(item.fecha), { addSuffix: true, locale: es })}
                     </p>
                   </div>
-                  <div className="shrink-0 text-right">
-                    <span
-                      className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-medium ${estadoConfig.bgColor} ${estadoConfig.color}`}
-                    >
-                      {estadoConfig.label}
-                    </span>
-                    <p className="mt-1 text-[10px] text-muted-foreground">
-                      {formatDistanceToNow(new Date(s.updatedAt), { addSuffix: true, locale: es })}
-                    </p>
-                  </div>
-                </Link>
+                </div>
               );
-            })}
-            {isLoadingMore && (
-              <div className="py-2 text-center text-xs text-muted-foreground">Cargando más...</div>
-            )}
-            {isReachingEnd && filtradas.length > 0 && (
-              <div className="py-2 text-center text-xs text-muted-foreground">No hay más solicitudes.</div>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+            })
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
+
