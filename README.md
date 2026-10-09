@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/use-auth';
 import { useAppStore } from '@/stores/app-store';
 import { cn } from '@/lib/utils';
@@ -12,21 +14,38 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Search, Bell, LogOut, User } from 'lucide-react';
 
+type SearchTarget = 'solicitudes' | 'repositorios';
+
 export function Header() {
   const { user, rol, signOut, isAuthenticated } = useAuth();
   const { sidebarOpen, globalSearch, setGlobalSearch, notifications } = useAppStore();
+  const router = useRouter();
+  const [searchTarget, setSearchTarget] = useState<SearchTarget>('solicitudes');
 
   const initials = user?.name
     ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
     : 'U';
 
   const roleInfo = ROLES[rol];
+
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter' && globalSearch.trim()) {
+      router.push(`/${searchTarget}?search=${encodeURIComponent(globalSearch.trim())}`);
+    }
+  }
 
   return (
     <header
@@ -37,17 +56,27 @@ export function Header() {
       )}
     >
       {/* Search */}
-      <div className="flex w-full max-w-md items-center gap-2">
+      <div className="flex w-full max-w-lg items-center gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             type="search"
-            placeholder="Buscar repositorios, solicitudes..."
+            placeholder={`Buscar ${searchTarget === 'solicitudes' ? 'solicitudes' : 'repositorios'}... (Enter)`}
             value={globalSearch}
             onChange={(e) => setGlobalSearch(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
             className="pl-9"
           />
         </div>
+        <Select value={searchTarget} onValueChange={(v) => setSearchTarget(v as SearchTarget)}>
+          <SelectTrigger className="w-[150px] shrink-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="solicitudes">Solicitudes</SelectItem>
+            <SelectItem value="repositorios">Repositorios</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Right side */}
@@ -126,3 +155,4 @@ export function Header() {
     </header>
   );
 }
+
