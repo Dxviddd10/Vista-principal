@@ -1,395 +1,128 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
-import Link from 'next/link';
-import { useRepositorios } from '@/hooks/use-data';
-import { PageHeader } from '@/components/shared/page-header';
-import { Loading } from '@/components/shared/loading';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { useAuth } from '@/hooks/use-auth';
+import { useAppStore } from '@/stores/app-store';
+import { cn } from '@/lib/utils';
+import { ROLES } from '@/lib/constants';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
-import { getEstadoBadge } from '@/utils/getEstadoBadge';
+import { Badge } from '@/components/ui/badge';
+import { Search, Bell, LogOut, User } from 'lucide-react';
 
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue
-} from '@/components/ui/select';
-import {
-	Table,
-	TableBody,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow
-} from '@/components/ui/table';
-import {
-	FolderGit2,
-	Search,
-	GitBranch,
-	History,
-	ExternalLink,
-	Filter,
-	RotateCcw,
-} from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
-import { es } from 'date-fns/locale';
-import { advancedMatch } from '@/utils/filtered';
+export function Header() {
+  const { user, rol, signOut, isAuthenticated } = useAuth();
+  const { sidebarOpen, globalSearch, setGlobalSearch, notifications } = useAppStore();
 
-export default function RepositoriosPage() {
+  const initials = user?.name
+    ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+    : 'U';
 
-	const [searchInput, setSearchInput] = useState('');
-	const [searchApi, setSearchApi] = useState('');
-	const [status, setStatus] = useState('all');
-	const [clienteInput, setClienteInput] = useState('');
-	const [clienteApi, setClienteApi] = useState('');
+  const roleInfo = ROLES[rol];
 
-	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  return (
+    <header
+      className={cn(
+        'fixed top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background px-4 transition-all duration-300',
+        sidebarOpen ? 'left-64' : 'left-16',
+        'right-0'
+      )}
+    >
+      {/* Search */}
+      <div className="flex w-full max-w-md items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            placeholder="Buscar repositorios, solicitudes..."
+            value={globalSearch}
+            onChange={(e) => setGlobalSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+      </div>
 
-	const {
-		repositorios,
-		total,
-		isLoading,
-		error,
-		loadMore,
-		isLoadingMore,
-		isReachingEnd
-	} = useRepositorios(searchApi, clienteApi);
+      {/* Right side */}
+      <div className="flex items-center gap-4">
+        {/* Notifications */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="relative">
+              <Bell className="h-5 w-5" />
+              {notifications.length > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-destructive-foreground">
+                  {notifications.length}
+                </span>
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-80">
+            <DropdownMenuLabel>Notificaciones</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {notifications.length === 0 ? (
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                No hay notificaciones
+              </div>
+            ) : (
+              notifications.slice(0, 5).map((notification) => (
+                <DropdownMenuItem key={notification.id} className="flex flex-col items-start gap-1">
+                  <span className="font-medium">{notification.title}</span>
+                  {notification.message && (
+                    <span className="text-xs text-muted-foreground">{notification.message}</span>
+                  )}
+                </DropdownMenuItem>
+              ))
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-	const reposFiltrados = useMemo(() => {
-		return repositorios.filter((repo: any) => {
-			const coincideTexto =
-				advancedMatch(repo.nombre || '', searchInput) ||
-				advancedMatch(repo.descripcion || '', searchInput);
-
-			const coincideCliente = advancedMatch(
-				repo.cliente || '',
-				clienteInput
-			);
-
-			const coincideEstado =
-				status === 'all'
-					? true
-					: repo.activo === status;
-
-			return coincideTexto && coincideCliente && coincideEstado
-		});
-	}, [repositorios, searchInput, clienteInput, status]);
-
-	const handleScroll = (
-		e: React.UIEvent<HTMLDivElement>
-	) => {
-		const { scrollTop, scrollHeight, clientHeight } =
-			e.currentTarget;
-
-		const isNearBottom =
-			scrollTop + clientHeight >= scrollHeight - 50;
-
-		if (
-			isNearBottom &&
-			!isLoadingMore &&
-			!isReachingEnd
-		) {
-			loadMore();
-		}
-	};
-
-	const handleSearch = (e: React.FormEvent) => {
-		e.preventDefault();
-
-		setSearchApi(searchInput.trim());
-		setClienteApi(clienteInput.trim());
-	};
-
-	const clearFilters = () => {
-		setSearchInput('');
-		setSearchApi('');
-		setClienteInput('');
-		setClienteApi('');
-		setStatus('all');
-	};
-
-	if (error) {
-		return (
-			<div className="flex h-[50vh] items-center justify-center">
-				<p className="text-destructive">
-					Error al cargar repositorios
-				</p>
-			</div>
-		);
-	}
-
-	return (
-		<div className="space-y-6">
-			<PageHeader
-				title="Repositorios"
-				description={`${total} repositorios registrados en el sistema`}
-			/>
-
-			{/* Filtros */}
-			<Card>
-				<CardHeader className="pb-3">
-					<div className="flex items-center gap-2">
-						<Filter className="h-4 w-4 text-muted-foreground" />
-						<CardTitle className="text-base">
-							Filtros
-						</CardTitle>
-					</div>
-				</CardHeader>
-
-				<CardContent>
-					<div className="flex flex-col gap-4 md:flex-row md:items-end">
-						<form
-							onSubmit={handleSearch}
-							className="flex flex-1 gap-2"
-						>
-							<div className="relative flex-1">
-								<Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-
-								<Input
-									placeholder="Buscar por nombre o descripción..."
-									value={searchInput}
-									onChange={(e) =>
-										setSearchInput(e.target.value)
-									}
-									className="pl-9"
-								/>
-							</div>
-
-							<div className="relative w-[220px]">
-								<Input
-									placeholder="Filtrar cliente..."
-									value={clienteInput}
-									onChange={(e) =>
-										setClienteInput(e.target.value)
-									}
-								/>
-							</div>
-
-							<Button
-								type="submit"
-								variant="secondary"
-							>
-								Buscar
-							</Button>
-						</form>
-
-						<Select
-							value={status}
-							onValueChange={setStatus}
-						>
-							<SelectTrigger className="w-[180px]">
-								<SelectValue placeholder="Estado" />
-							</SelectTrigger>
-
-							<SelectContent>
-								<SelectItem value="all">
-									Todos
-								</SelectItem>
-								<SelectItem value="active">
-									Activo
-								</SelectItem>
-								<SelectItem value="deprecated">
-									Obsoleto
-								</SelectItem>
-								<SelectItem value="frozen">
-									Congelado
-								</SelectItem>
-							</SelectContent>
-						</Select>
-
-						{(searchInput || clienteInput || status !== 'all') && (
-							<Button
-								variant="ghost"
-								onClick={clearFilters}
-							>
-								Limpiar filtros
-							</Button>
-						)}
-					</div>
-				</CardContent>
-			</Card>
-
-			{/* Tabla */}
-			<Card>
-				<CardContent className="pt-6">
-					{isLoading ? (
-						<Loading text="Cargando repositorios..." />
-					) : reposFiltrados.length === 0 ? (
-						<div className="flex flex-col items-center justify-center py-12">
-							<FolderGit2 className="mb-4 h-12 w-12 text-muted-foreground/30" />
-
-							<p className="text-muted-foreground">
-								No se encontraron repositorios
-							</p>
-						</div>
-					) : (
-						<div className="overflow-x-auto">
-							<div>
-								<div
-									className="max-h-[400px] overflow-y-auto "
-									ref={scrollContainerRef}
-									onScroll={handleScroll}
-								>
-									<Table>
-										<TableHeader>
-											<TableRow>
-												<TableHead>
-													Repositorio
-												</TableHead>
-
-												<TableHead>
-													Cliente
-												</TableHead>
-
-												<TableHead>
-													Estado
-												</TableHead>
-
-												<TableHead>
-													Ramas
-												</TableHead>
-
-												<TableHead>
-													Última Actividad
-												</TableHead>
-
-												<TableHead className="text-right">
-													Acciones
-												</TableHead>
-											</TableRow>
-										</TableHeader>
-
-										<TableBody className=''>
-											{reposFiltrados.map((repo: any, index: number) => (
-												<TableRow key={index}>
-													<TableCell>
-														<div className="flex items-center gap-3">
-															<div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50">
-																<FolderGit2 className="h-5 w-5 text-blue-600" />
-															</div>
-
-															<div>
-																<Link
-																	href={`/repositorios/${repo.gitlabId}`}
-																	className="font-medium hover:underline"
-																>
-																	{repo.nombre}
-																</Link>
-
-																<p className="text-sm text-muted-foreground line-clamp-1 w-80 overflow-x-hidden">
-																	{repo.descripcion}
-																</p>
-															</div>
-														</div>
-													</TableCell>
-
-													<TableCell>
-														{repo.cliente}
-													</TableCell>
-
-													<TableCell>
-														{getEstadoBadge(repo.activo)}
-													</TableCell>
-
-													<TableCell>
-														<span className="font-medium">
-															{repo.numeroDeRamas}
-														</span>
-													</TableCell>
-
-													<TableCell>
-														<span className="text-sm text-muted-foreground">
-															{formatDistanceToNow(
-																new Date(
-																	repo.updatedAt
-																),
-																{
-																	addSuffix: true,
-																	locale: es
-																}
-															)}
-														</span>
-													</TableCell>
-
-													<TableCell className="text-right">
-														<div className="flex items-center justify-end gap-1">
-															<Button
-																variant="ghost"
-																size="icon"
-																asChild
-																title="Ver detalles"
-															>
-																<Link
-																	href={`/repositorios/${repo.gitlabId}`}
-																>
-																	<ExternalLink className="h-4 w-4" />
-																</Link>
-															</Button>
-
-															<Button
-																variant="ghost"
-																size="icon"
-																asChild
-																title="Ver ramas"
-															>
-																<Link
-																	href={`/repositorios/${repo.gitlabId}/ramas`}
-																>
-																	<GitBranch className="h-4 w-4" />
-																</Link>
-															</Button>
-
-															<Button
-																variant="ghost"
-																size="icon"
-																asChild
-																title="Ver commits"
-															>
-																<Link
-																	href={`/repositorios/${repo.gitlabId}/commits`}
-																>
-																	<History className="h-4 w-4" />
-																</Link>
-															</Button>
-
-															<Button
-																variant="ghost"
-																size="icon"
-																asChild
-																title="Rollback"
-															>
-																<Link
-																	href={`/repositorios/${repo.gitlabId}/rollback`}
-																>
-																	<RotateCcw className="h-4 w-4" />
-																</Link>
-															</Button>
-														</div>
-													</TableCell>
-												</TableRow>
-											))}
-										</TableBody>
-									</Table>
-									{isLoadingMore && (
-										<div className="py-4 text-center text-sm text-muted-foreground">
-											Cargando más repositorios...
-										</div>
-									)}
-
-									{isReachingEnd && repositorios.length > 0 && (
-										<div className="py-4 text-center text-sm text-muted-foreground">
-											No hay más repositorios
-										</div>
-									)}
-								</div>
-							</div>
-						</div>
-					)}
-				</CardContent>
-			</Card>
-		</div>
-	);
+        {/* User Menu */}
+        {isAuthenticated && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="flex items-center gap-2 px-2">
+                <Avatar className="h-8 w-8">
+                  <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                    {initials}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="hidden flex-col items-start text-left md:flex">
+                  <span className="text-sm font-medium">{user?.name}</span>
+                  <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                    {roleInfo?.label || rol}
+                  </Badge>
+                </div>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel className="font-normal">
+                <div className="flex flex-col space-y-1">
+                  <p className="text-sm font-medium">{user?.name}</p>
+                  <p className="text-xs text-muted-foreground">{user?.email}</p>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem>
+                <User className="mr-2 h-4 w-4" />
+                <span>Mi Perfil</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => signOut()} className="text-destructive">
+                <LogOut className="mr-2 h-4 w-4" />
+                <span>Cerrar Sesion</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    </header>
+  );
 }
