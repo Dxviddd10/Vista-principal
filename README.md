@@ -1,210 +1,395 @@
 'use client';
 
-import { useState } from 'react';
-import { useDashboardStats, useActividadReciente } from '@/hooks/use-data';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import Link from 'next/link';
+import { useRepositorios } from '@/hooks/use-data';
 import { PageHeader } from '@/components/shared/page-header';
 import { Loading } from '@/components/shared/loading';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { getEstadoBadge } from '@/utils/getEstadoBadge';
+
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue
 } from '@/components/ui/select';
 import {
-  FolderGit2,
-  GitMerge,
-  FileText,
-  GitCommit,
-  ArrowRight,
-  Clock,
-  RefreshCw,
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow
+} from '@/components/ui/table';
+import {
+	FolderGit2,
+	Search,
+	GitBranch,
+	History,
+	ExternalLink,
+	Filter,
+	RotateCcw,
 } from 'lucide-react';
-import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { FlujoDespliegueCard } from '@/components/dashboard/flujo-despliegues-card';
-import { ActivityHistoryDialog } from '@/components/dashboard/activity-history-dialog';
+import { advancedMatch } from '@/utils/filtered';
 
-export default function DashboardPage() {
-  const { stats, isLoading: statsLoading, refresh: refreshStats } = useDashboardStats();
-  const { actividad, isLoading: actividadLoading, refresh: refreshActividad } = useActividadReciente(10);
+export default function RepositoriosPage() {
 
-  const [tipoFiltro, setTipoFiltro] = useState('all');
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [refreshSignal, setRefreshSignal] = useState(0);
+	const [searchInput, setSearchInput] = useState('');
+	const [searchApi, setSearchApi] = useState('');
+	const [status, setStatus] = useState('all');
+	const [clienteInput, setClienteInput] = useState('');
+	const [clienteApi, setClienteApi] = useState('');
 
-  const actividadFiltrada = actividad.filter((item) => tipoFiltro === 'all' || item.tipo === tipoFiltro);
+	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
-  async function handleRefresh() {
-    setRefreshing(true);
-    try {
-      await Promise.all([refreshStats(), refreshActividad()]);
-      setRefreshSignal((n) => n + 1); // avisa a FlujoDespliegueCard que también se actualice
-      setLastUpdated(new Date());
-    } finally {
-      setRefreshing(false);
-    }
-  }
+	const {
+		repositorios,
+		total,
+		isLoading,
+		error,
+		loadMore,
+		isLoadingMore,
+		isReachingEnd
+	} = useRepositorios(searchApi, clienteApi);
 
-  const statCards = [
-    {
-      title: 'Commits Totales',
-      value: stats?.total_commits ?? 0,
-      icon: GitCommit,
-      href: '/repositorios',
-      color: 'text-emerald-600',
-      bgColor: 'bg-emerald-50',
-    },
-    {
-      title: 'Merges Aprobados',
-      value: stats?.total_merges_aprobados ?? 0,
-      icon: GitMerge,
-      href: '/merges',
-      color: 'text-amber-600',
-      bgColor: 'bg-amber-50',
-    },
-    {
-      title: 'Ramas Creadas',
-      value: stats?.total_ramas_creadas ?? 0,
-      icon: FolderGit2,
-      href: '/repositorios',
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50',
-    },
-  ];
+	const reposFiltrados = useMemo(() => {
+		return repositorios.filter((repo: any) => {
+			const coincideTexto =
+				advancedMatch(repo.nombre || '', searchInput) ||
+				advancedMatch(repo.descripcion || '', searchInput);
 
-  const tipoIcons: Record<string, React.ElementType> = {
-    commit: GitCommit,
-    merge: GitMerge,
-    solicitud: FileText,
-    rollback: Clock,
-  };
+			const coincideCliente = advancedMatch(
+				repo.cliente || '',
+				clienteInput
+			);
 
-  const getActionLabel = (tipo: string) => {
-    const labels: Record<string, string> = {
-      commit: 'Realizó un commit',
-      merge: 'Solicitud de merge',
-      solicitud: 'Creó una solicitud',
-      rollback: 'Ejecutó rollback',
-    };
-    return labels[tipo] || tipo;
-  };
+			const coincideEstado =
+				status === 'all'
+					? true
+					: repo.activo === status;
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <PageHeader title="Dashboard" description="Resumen general del sistema de gestion de repositorios" />
-        <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          {refreshing
-            ? 'Actualizando...'
-            : lastUpdated
-              ? `Actualizado ${formatDistanceToNow(lastUpdated, { addSuffix: true, locale: es })}`
-              : 'Actualizar'}
-        </Button>
-      </div>
+			return coincideTexto && coincideCliente && coincideEstado
+		});
+	}, [repositorios, searchInput, clienteInput, status]);
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {statCards.map((stat) => {
-          const Icon = stat.icon;
-          return (
-            <Card key={stat.title} className="overflow-hidden">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">{stat.title}</CardTitle>
-                <div className={`rounded-lg p-2 ${stat.bgColor}`}>
-                  <Icon className={`h-4 w-4 ${stat.color}`} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-baseline gap-2">
-                  <div className="text-3xl font-bold">{statsLoading ? '-' : stat.value}</div>
-                </div>
-                <Link
-                  href={stat.href}
-                  className="mt-3 flex items-center text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  Ver detalles
-                  <ArrowRight className="ml-1 h-3 w-3" />
-                </Link>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+	const handleScroll = (
+		e: React.UIEvent<HTMLDivElement>
+	) => {
+		const { scrollTop, scrollHeight, clientHeight } =
+			e.currentTarget;
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <FlujoDespliegueCard refreshSignal={refreshSignal} />
+		const isNearBottom =
+			scrollTop + clientHeight >= scrollHeight - 50;
 
-        {/* Actividad Reciente */}
-        <Card className="h-[500px]">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
-                <Clock className="h-5 w-5 text-blue-600" />
-                Actividad Reciente
-              </CardTitle>
-            </div>
-            <CardDescription>Ultimas acciones en el sistema</CardDescription>
-            <Select value={tipoFiltro} onValueChange={setTipoFiltro}>
-              <SelectTrigger className="mt-2 w-full">
-                <SelectValue placeholder="Filtrar por tipo" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos</SelectItem>
-                <SelectItem value="commit">Commits</SelectItem>
-                <SelectItem value="merge">Merges</SelectItem>
-                <SelectItem value="solicitud">Solicitudes</SelectItem>
-                <SelectItem value="rollback">Rollbacks</SelectItem>
-              </SelectContent>
-            </Select>
-          </CardHeader>
-          <CardContent className="overflow-scroll">
-            {actividadLoading ? (
-              <Loading text="Cargando actividad..." />
-            ) : actividadFiltrada.length === 0 ? (
-              <div className="py-8 text-center">
-                <Clock className="mx-auto h-12 w-12 text-muted-foreground/30" />
-                <p className="mt-2 text-sm text-muted-foreground">No hay actividad reciente</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {actividadFiltrada.map((item, idx) => {
-                  const Icon = tipoIcons[item.tipo] || GitCommit;
-                  return (
-                    <div key={idx} className="flex gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-                        <Icon className="h-4 w-4 text-muted-foreground" />
-                      </div>
-                      <div className="flex-1 space-y-1">
-                        <p className="text-sm">
-                          <span className="font-medium">{item.usuario}</span>{' '}
-                          <span className="text-muted-foreground">{getActionLabel(item.tipo)}</span>
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {formatDistanceToNow(new Date(item.fecha), { addSuffix: true, locale: es })}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-          <div className="border-t p-3">
-            <Button variant="ghost" size="sm" className="w-full" onClick={() => setHistoryOpen(true)}>
-              Ver historial completo →
-            </Button>
-          </div>
-        </Card>
-      </div>
+		if (
+			isNearBottom &&
+			!isLoadingMore &&
+			!isReachingEnd
+		) {
+			loadMore();
+		}
+	};
 
-      <ActivityHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} />
-    </div>
-  );
+	const handleSearch = (e: React.FormEvent) => {
+		e.preventDefault();
+
+		setSearchApi(searchInput.trim());
+		setClienteApi(clienteInput.trim());
+	};
+
+	const clearFilters = () => {
+		setSearchInput('');
+		setSearchApi('');
+		setClienteInput('');
+		setClienteApi('');
+		setStatus('all');
+	};
+
+	if (error) {
+		return (
+			<div className="flex h-[50vh] items-center justify-center">
+				<p className="text-destructive">
+					Error al cargar repositorios
+				</p>
+			</div>
+		);
+	}
+
+	return (
+		<div className="space-y-6">
+			<PageHeader
+				title="Repositorios"
+				description={`${total} repositorios registrados en el sistema`}
+			/>
+
+			{/* Filtros */}
+			<Card>
+				<CardHeader className="pb-3">
+					<div className="flex items-center gap-2">
+						<Filter className="h-4 w-4 text-muted-foreground" />
+						<CardTitle className="text-base">
+							Filtros
+						</CardTitle>
+					</div>
+				</CardHeader>
+
+				<CardContent>
+					<div className="flex flex-col gap-4 md:flex-row md:items-end">
+						<form
+							onSubmit={handleSearch}
+							className="flex flex-1 gap-2"
+						>
+							<div className="relative flex-1">
+								<Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+
+								<Input
+									placeholder="Buscar por nombre o descripción..."
+									value={searchInput}
+									onChange={(e) =>
+										setSearchInput(e.target.value)
+									}
+									className="pl-9"
+								/>
+							</div>
+
+							<div className="relative w-[220px]">
+								<Input
+									placeholder="Filtrar cliente..."
+									value={clienteInput}
+									onChange={(e) =>
+										setClienteInput(e.target.value)
+									}
+								/>
+							</div>
+
+							<Button
+								type="submit"
+								variant="secondary"
+							>
+								Buscar
+							</Button>
+						</form>
+
+						<Select
+							value={status}
+							onValueChange={setStatus}
+						>
+							<SelectTrigger className="w-[180px]">
+								<SelectValue placeholder="Estado" />
+							</SelectTrigger>
+
+							<SelectContent>
+								<SelectItem value="all">
+									Todos
+								</SelectItem>
+								<SelectItem value="active">
+									Activo
+								</SelectItem>
+								<SelectItem value="deprecated">
+									Obsoleto
+								</SelectItem>
+								<SelectItem value="frozen">
+									Congelado
+								</SelectItem>
+							</SelectContent>
+						</Select>
+
+						{(searchInput || clienteInput || status !== 'all') && (
+							<Button
+								variant="ghost"
+								onClick={clearFilters}
+							>
+								Limpiar filtros
+							</Button>
+						)}
+					</div>
+				</CardContent>
+			</Card>
+
+			{/* Tabla */}
+			<Card>
+				<CardContent className="pt-6">
+					{isLoading ? (
+						<Loading text="Cargando repositorios..." />
+					) : reposFiltrados.length === 0 ? (
+						<div className="flex flex-col items-center justify-center py-12">
+							<FolderGit2 className="mb-4 h-12 w-12 text-muted-foreground/30" />
+
+							<p className="text-muted-foreground">
+								No se encontraron repositorios
+							</p>
+						</div>
+					) : (
+						<div className="overflow-x-auto">
+							<div>
+								<div
+									className="max-h-[400px] overflow-y-auto "
+									ref={scrollContainerRef}
+									onScroll={handleScroll}
+								>
+									<Table>
+										<TableHeader>
+											<TableRow>
+												<TableHead>
+													Repositorio
+												</TableHead>
+
+												<TableHead>
+													Cliente
+												</TableHead>
+
+												<TableHead>
+													Estado
+												</TableHead>
+
+												<TableHead>
+													Ramas
+												</TableHead>
+
+												<TableHead>
+													Última Actividad
+												</TableHead>
+
+												<TableHead className="text-right">
+													Acciones
+												</TableHead>
+											</TableRow>
+										</TableHeader>
+
+										<TableBody className=''>
+											{reposFiltrados.map((repo: any, index: number) => (
+												<TableRow key={index}>
+													<TableCell>
+														<div className="flex items-center gap-3">
+															<div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50">
+																<FolderGit2 className="h-5 w-5 text-blue-600" />
+															</div>
+
+															<div>
+																<Link
+																	href={`/repositorios/${repo.gitlabId}`}
+																	className="font-medium hover:underline"
+																>
+																	{repo.nombre}
+																</Link>
+
+																<p className="text-sm text-muted-foreground line-clamp-1 w-80 overflow-x-hidden">
+																	{repo.descripcion}
+																</p>
+															</div>
+														</div>
+													</TableCell>
+
+													<TableCell>
+														{repo.cliente}
+													</TableCell>
+
+													<TableCell>
+														{getEstadoBadge(repo.activo)}
+													</TableCell>
+
+													<TableCell>
+														<span className="font-medium">
+															{repo.numeroDeRamas}
+														</span>
+													</TableCell>
+
+													<TableCell>
+														<span className="text-sm text-muted-foreground">
+															{formatDistanceToNow(
+																new Date(
+																	repo.updatedAt
+																),
+																{
+																	addSuffix: true,
+																	locale: es
+																}
+															)}
+														</span>
+													</TableCell>
+
+													<TableCell className="text-right">
+														<div className="flex items-center justify-end gap-1">
+															<Button
+																variant="ghost"
+																size="icon"
+																asChild
+																title="Ver detalles"
+															>
+																<Link
+																	href={`/repositorios/${repo.gitlabId}`}
+																>
+																	<ExternalLink className="h-4 w-4" />
+																</Link>
+															</Button>
+
+															<Button
+																variant="ghost"
+																size="icon"
+																asChild
+																title="Ver ramas"
+															>
+																<Link
+																	href={`/repositorios/${repo.gitlabId}/ramas`}
+																>
+																	<GitBranch className="h-4 w-4" />
+																</Link>
+															</Button>
+
+															<Button
+																variant="ghost"
+																size="icon"
+																asChild
+																title="Ver commits"
+															>
+																<Link
+																	href={`/repositorios/${repo.gitlabId}/commits`}
+																>
+																	<History className="h-4 w-4" />
+																</Link>
+															</Button>
+
+															<Button
+																variant="ghost"
+																size="icon"
+																asChild
+																title="Rollback"
+															>
+																<Link
+																	href={`/repositorios/${repo.gitlabId}/rollback`}
+																>
+																	<RotateCcw className="h-4 w-4" />
+																</Link>
+															</Button>
+														</div>
+													</TableCell>
+												</TableRow>
+											))}
+										</TableBody>
+									</Table>
+									{isLoadingMore && (
+										<div className="py-4 text-center text-sm text-muted-foreground">
+											Cargando más repositorios...
+										</div>
+									)}
+
+									{isReachingEnd && repositorios.length > 0 && (
+										<div className="py-4 text-center text-sm text-muted-foreground">
+											No hay más repositorios
+										</div>
+									)}
+								</div>
+							</div>
+						</div>
+					)}
+				</CardContent>
+			</Card>
+		</div>
+	);
 }
