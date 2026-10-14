@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useAuth } from '@/hooks/use-auth';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { useMemo, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useSolicitudes } from '@/hooks/use-data';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -12,192 +14,181 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
-import { SlidersHorizontal, Star, Trash2, Bookmark } from 'lucide-react';
-import {
-  deleteFlujoFavorito,
-  getFlujoFavoritos,
-  saveFlujoFavorito,
-  type FlujoFavorito,
-} from '@/lib/flujo-favorites';
+import { FileText, Search, ArrowRight } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { advancedMatch } from '@/utils/filtered';
+import { FlujoFiltros, type FlujoFiltrosValue } from './flujo-filtros';
+import type { FlujoFavorito } from '@/lib/flujo-favorites';
 
-export interface FlujoFiltrosValue {
-  cliente: string;
-  dateFrom: string;
-  dateTo: string;
-}
+const estadosSolicitud: Record<string, { label: string; color: string; bgColor: string }> = {
+  pendiente_autorizacion: { label: 'Pendiente', color: 'text-gray-700', bgColor: 'bg-gray-100' },
+  en_desarrollo: { label: 'En Desarrollo', color: 'text-blue-700', bgColor: 'bg-blue-100' },
+  en_test: { label: 'En Test', color: 'text-purple-700', bgColor: 'bg-purple-100' },
+  completado: { label: 'Completado', color: 'text-green-700', bgColor: 'bg-green-100' },
+};
 
-export function FlujoFiltros({
-  clientes,
-  value,
-  onChange,
-  estado,
-  tipo,
-  onApplyFavorito,
-}: {
-  clientes: string[];
-  value: FlujoFiltrosValue;
-  onChange: (value: FlujoFiltrosValue) => void;
-  estado: string;
-  tipo: string;
-  onApplyFavorito: (favorito: FlujoFavorito) => void;
-}) {
-  const { user } = useAuth();
-  const userId = user?.id || 'anon';
+const estadoOptions = [
+  { value: 'all', label: 'Todos' },
+  { value: 'pendiente_autorizacion', label: 'Pendiente' },
+  { value: 'en_desarrollo', label: 'Desarrollo' },
+  { value: 'en_test', label: 'Test' },
+  { value: 'completado', label: 'Completado' },
+];
 
-  const [open, setOpen] = useState(false);
-  const [favoriteName, setFavoriteName] = useState('');
-  const [query, setQuery] = useState('');
-  const [favoritos, setFavoritos] = useState<FlujoFavorito[]>([]);
+export function FlujoDespliegueCard({ refreshSignal }: { refreshSignal: number }) {
+  const [searchInput, setSearchInput] = useState('');
+  const [searchApi, setSearchApi] = useState('');
+  const [estadoApi, setEstadoApi] = useState('');
+  const [extra, setExtra] = useState<FlujoFiltrosValue>({ cliente: '', dateFrom: '', dateTo: '' });
+
+  const { solicitudes, total, isLoading, isLoadingMore, isReachingEnd, loadMore, refresh } =
+    useSolicitudes(searchApi, estadoApi, '');
 
   useEffect(() => {
-    setFavoritos(getFlujoFavoritos(userId));
-  }, [userId]);
+    if (refreshSignal > 0) refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshSignal]);
 
-  const activeCount = [value.cliente !== '', Boolean(value.dateFrom), Boolean(value.dateTo)].filter(
-    Boolean,
-  ).length;
+  const clientes = useMemo(
+    () => [...new Set(solicitudes.map((s: any) => s.cliente).filter(Boolean))] as string[],
+    [solicitudes],
+  );
 
-  const favoritosFiltrados = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    if (!term) return favoritos;
-    return favoritos.filter((f) => f.name.toLowerCase().includes(term));
-  }, [favoritos, query]);
+  const filtradas = useMemo(() => {
+    const fromTime = extra.dateFrom ? new Date(extra.dateFrom).getTime() : null;
+    const toTime = extra.dateTo ? new Date(extra.dateTo).getTime() + (24 * 60 * 60 * 1000 - 1) : null;
 
-  function handleSaveFavorito() {
-    const name = favoriteName.trim();
-    if (!name) return;
-    const favorito: FlujoFavorito = {
-      id: `fav-${Date.now()}`,
-      name,
-      estado,
-      tipo,
-      cliente: value.cliente,
-      dateFrom: value.dateFrom,
-      dateTo: value.dateTo,
-    };
-    setFavoritos(saveFlujoFavorito(userId, favorito));
-    setFavoriteName('');
+    return solicitudes.filter((s: any) => {
+      const matchesText =
+        advancedMatch(s.numeroSolicitud || '', searchInput) || advancedMatch(s.descripcion || '', searchInput);
+      const matchesCliente = !extra.cliente || s.cliente === extra.cliente;
+      const updatedTime = new Date(s.updatedAt).getTime();
+      const matchesFrom = fromTime === null || updatedTime >= fromTime;
+      const matchesTo = toTime === null || updatedTime <= toTime;
+      return matchesText && matchesCliente && matchesFrom && matchesTo;
+    });
+  }, [solicitudes, searchInput, extra]);
+
+  function handleSearchSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSearchApi(searchInput.trim());
   }
 
-  function handleRemoveFavorito(id: string) {
-    setFavoritos(deleteFlujoFavorito(userId, id));
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const nearBottom = scrollTop + clientHeight >= scrollHeight - 50;
+    if (nearBottom && !isLoadingMore && !isReachingEnd) loadMore();
   }
 
-  function handleApply(favorito: FlujoFavorito) {
-    onApplyFavorito(favorito);
-    setOpen(false);
+  function handleApplyFavorito(favorito: FlujoFavorito) {
+    setEstadoApi(favorito.estado);
+    setExtra({ cliente: favorito.cliente, dateFrom: favorito.dateFrom, dateTo: favorito.dateTo });
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-1.5">
-          <SlidersHorizontal className="h-3.5 w-3.5" />
-          Más filtros
-          {activeCount > 0 && (
-            <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
-              {activeCount}
-            </Badge>
-          )}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
-        {/* Buscador de favoritos */}
-        <div className="border-b p-3">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Star className="h-3 w-3" /> Buscar un filtro guardado
-          </label>
-          <Input
-            className="mt-1.5"
-            placeholder="Nombre del filtro..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <div className="mt-2 max-h-32 space-y-1 overflow-y-auto">
-            {favoritos.length === 0 && (
-              <p className="px-1 py-2 text-xs text-muted-foreground">
-                Aún no tienes filtros guardados.
-              </p>
-            )}
-            {favoritos.length > 0 && favoritosFiltrados.length === 0 && (
-              <p className="px-1 py-2 text-xs text-muted-foreground">
-                Ningún filtro coincide con &quot;{query}&quot;.
-              </p>
-            )}
-            {favoritosFiltrados.map((f) => (
-              <div key={f.id} className="flex items-center justify-between gap-2 rounded-md hover:bg-muted/50">
-                <button onClick={() => handleApply(f)} className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs">
-                  {f.name}
-                </button>
-                <button
-                  aria-label={`Eliminar ${f.name}`}
-                  onClick={() => handleRemoveFavorito(f.id)}
-                  className="shrink-0 p-1.5 text-muted-foreground hover:text-destructive"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
+    <Card className="lg:col-span-2">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-rose-600" />
+              Flujo de despliegues
+            </CardTitle>
+            <CardDescription>{total} solicitudes · cada una es un cambio en curso</CardDescription>
           </div>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/solicitudes">
+              Ver todas <ArrowRight className="ml-1 h-3 w-3" />
+            </Link>
+          </Button>
         </div>
 
-        {/* Filtros manuales */}
-        <div className="space-y-3 p-3">
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Cliente</label>
-            <Select
-              value={value.cliente || 'all'}
-              onValueChange={(v) => onChange({ ...value, cliente: v === 'all' ? '' : v })}
-            >
-              <SelectTrigger className="mt-1.5">
-                <SelectValue placeholder="Todos los clientes" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos los clientes</SelectItem>
-                {clientes.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Última actividad</label>
-            <div className="mt-1.5 flex items-center gap-2">
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <form onSubmit={handleSearchSubmit} className="flex flex-1 gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                type="date"
-                value={value.dateFrom}
-                onChange={(e) => onChange({ ...value, dateFrom: e.target.value })}
-              />
-              <span className="text-muted-foreground">–</span>
-              <Input
-                type="date"
-                value={value.dateTo}
-                onChange={(e) => onChange({ ...value, dateTo: e.target.value })}
+                placeholder="Buscar..."
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                className="pl-9"
               />
             </div>
-          </div>
+          </form>
+          <Select value={estadoApi || 'all'} onValueChange={(v) => setEstadoApi(v === 'all' ? '' : v)}>
+            <SelectTrigger className="w-[160px]">
+              <SelectValue placeholder="Estado" />
+            </SelectTrigger>
+            <SelectContent>
+              {estadoOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <FlujoFiltros
+            clientes={clientes}
+            value={extra}
+            onChange={setExtra}
+            estado={estadoApi}
+            tipo=""
+            onApplyFavorito={handleApplyFavorito}
+          />
         </div>
+      </CardHeader>
 
-        {/* Guardar combinación actual */}
-        <div className="border-t p-3">
-          <label className="text-xs font-medium text-muted-foreground">Guardar esta combinación</label>
-          <div className="mt-1.5 flex items-center gap-1.5">
-            <Input
-              placeholder="Nombre para este filtro"
-              value={favoriteName}
-              onChange={(e) => setFavoriteName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSaveFavorito()}
-            />
-            <Button size="icon" variant="secondary" disabled={!favoriteName.trim()} onClick={handleSaveFavorito}>
-              <Bookmark className="h-3.5 w-3.5" />
-            </Button>
+      <CardContent>
+        {isLoading ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">Cargando...</div>
+        ) : filtradas.length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No hay solicitudes que coincidan.
           </div>
-        </div>
-      </PopoverContent>
-    </Popover>
+        ) : (
+          <div onScroll={handleScroll} className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+            {filtradas.map((s: any) => {
+              const estadoConfig = estadosSolicitud[s.estado] || estadosSolicitud.pendiente_autorizacion;
+              return (
+                <Link
+                  key={s.id}
+                  href={`/solicitudes/${s.id}`}
+                  className="flex items-center justify-between gap-3 rounded-lg border p-3 transition-all hover:bg-muted/50"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{s.numeroSolicitud}</span>
+                      <Badge variant={s.tipo === 'incidente' ? 'destructive' : 'secondary'} className="text-[10px]">
+                        {s.tipo === 'incidente' ? 'Incidente' : 'Requerimiento'}
+                      </Badge>
+                    </div>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {s.cliente} · {s.descripcion}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <span
+                      className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-medium ${estadoConfig.bgColor} ${estadoConfig.color}`}
+                    >
+                      {estadoConfig.label}
+                    </span>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {formatDistanceToNow(new Date(s.updatedAt), { addSuffix: true, locale: es })}
+                    </p>
+                  </div>
+                </Link>
+              );
+            })}
+            {isLoadingMore && (
+              <div className="py-2 text-center text-xs text-muted-foreground">Cargando más...</div>
+            )}
+            {isReachingEnd && filtradas.length > 0 && (
+              <div className="py-2 text-center text-xs text-muted-foreground">No hay más solicitudes.</div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
