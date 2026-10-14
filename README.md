@@ -1,8 +1,12 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { useMemo, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useSolicitudes } from '@/hooks/use-data';
+import { useFlujoFavoritos } from '@/hooks/use-flujo-favoritos';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -11,139 +15,207 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
-import { SlidersHorizontal, Star } from 'lucide-react';
+import { FileText, Search, ArrowRight } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { advancedMatch } from '@/utils/filtered';
+import { FlujoFiltros, type FlujoFiltrosValue } from './flujo-filtros';
+import { FlujoFavoriteChips } from './flujo-favorite-chips';
 import type { FlujoFavorito } from '@/lib/flujo-favorites';
 
-export interface FlujoFiltrosValue {
-  cliente: string;
-  descripcion: string;
-  dateFrom: string;
-  dateTo: string;
-}
+const estadosSolicitud: Record<string, { label: string; color: string; bgColor: string }> = {
+  pendiente_autorizacion: { label: 'Pendiente', color: 'text-gray-700', bgColor: 'bg-gray-100' },
+  en_desarrollo: { label: 'En Desarrollo', color: 'text-blue-700', bgColor: 'bg-blue-100' },
+  en_test: { label: 'En Test', color: 'text-purple-700', bgColor: 'bg-purple-100' },
+  completado: { label: 'Completado', color: 'text-green-700', bgColor: 'bg-green-100' },
+};
 
-export function FlujoFiltros({
-  clientes,
-  value,
-  onChange,
-  favoritos,
-  onApplyFavorito,
-}: {
-  clientes: string[];
-  value: FlujoFiltrosValue;
-  onChange: (value: FlujoFiltrosValue) => void;
-  favoritos: FlujoFavorito[];
-  onApplyFavorito: (favorito: FlujoFavorito) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
+const estadoOptions = [
+  { value: 'all', label: 'Todos' },
+  { value: 'pendiente_autorizacion', label: 'Pendiente' },
+  { value: 'en_desarrollo', label: 'Desarrollo' },
+  { value: 'en_test', label: 'Test' },
+  { value: 'completado', label: 'Completado' },
+];
 
-  const activeCount = [
-    value.cliente !== '',
-    value.descripcion !== '',
-    Boolean(value.dateFrom),
-    Boolean(value.dateTo),
-  ].filter(Boolean).length;
+export function FlujoDespliegueCard({ refreshSignal }: { refreshSignal: number }) {
+  const [searchInput, setSearchInput] = useState('');
+  const [searchApi, setSearchApi] = useState('');
+  const [estadoApi, setEstadoApi] = useState('');
+  const [extra, setExtra] = useState<FlujoFiltrosValue>({ cliente: '', descripcion: '', dateFrom: '', dateTo: '' });
 
-  const favoritosFiltrados = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    if (!term) return favoritos;
-    return favoritos.filter((f) => f.name.toLowerCase().includes(term));
-  }, [favoritos, query]);
+  const { favoritos, save: saveFavorito, remove: removeFavorito } = useFlujoFavoritos();
 
-  function handleApply(favorito: FlujoFavorito) {
-    onApplyFavorito(favorito);
-    setOpen(false);
+  const { solicitudes, total, isLoading, isLoadingMore, isReachingEnd, loadMore, refresh } =
+    useSolicitudes(searchApi, estadoApi, '');
+
+  useEffect(() => {
+    if (refreshSignal > 0) refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshSignal]);
+
+  const clientes = useMemo(
+    () => [...new Set(solicitudes.map((s: any) => s.cliente).filter(Boolean))] as string[],
+    [solicitudes],
+  );
+
+  const filtradas = useMemo(() => {
+    const fromTime = extra.dateFrom ? new Date(extra.dateFrom).getTime() : null;
+    const toTime = extra.dateTo ? new Date(extra.dateTo).getTime() + (24 * 60 * 60 * 1000 - 1) : null;
+
+    return solicitudes.filter((s: any) => {
+      const matchesText =
+        !searchInput ||
+        advancedMatch(s.numeroSolicitud || '', searchInput) ||
+        advancedMatch(s.descripcion || '', searchInput);
+      const matchesDescripcion = !extra.descripcion || advancedMatch(s.descripcion || '', extra.descripcion);
+      const matchesCliente = !extra.cliente || s.cliente === extra.cliente;
+      const updatedTime = new Date(s.updatedAt).getTime();
+      const matchesFrom = fromTime === null || updatedTime >= fromTime;
+      const matchesTo = toTime === null || updatedTime <= toTime;
+      return matchesText && matchesDescripcion && matchesCliente && matchesFrom && matchesTo;
+    });
+  }, [solicitudes, searchInput, extra]);
+
+  function handleSearchSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSearchApi(searchInput.trim());
+  }
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const nearBottom = scrollTop + clientHeight >= scrollHeight - 50;
+    if (nearBottom && !isLoadingMore && !isReachingEnd) loadMore();
+  }
+
+  function applyFavorito(favorito: FlujoFavorito) {
+    setEstadoApi(favorito.estado);
+    setExtra({ cliente: favorito.cliente, descripcion: favorito.descripcion, dateFrom: favorito.dateFrom, dateTo: favorito.dateTo });
+  }
+
+  function saveCurrentAsFavorito(name: string) {
+    saveFavorito({
+      id: `fav-${Date.now()}`,
+      name,
+      estado: estadoApi,
+      tipo: '',
+      cliente: extra.cliente,
+      descripcion: extra.descripcion,
+      dateFrom: extra.dateFrom,
+      dateTo: extra.dateTo,
+    });
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-1.5">
-          <SlidersHorizontal className="h-3.5 w-3.5" />
-          Más filtros
-          {activeCount > 0 && (
-            <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
-              {activeCount}
-            </Badge>
-          )}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
-        {favoritos.length > 2 && (
-          <div className="border-b p-3">
-            <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              <Star className="h-3 w-3" /> Buscar un filtro guardado
-            </label>
-            <Input
-              className="mt-1.5"
-              placeholder="Nombre del filtro..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <div className="mt-2 max-h-28 space-y-1 overflow-y-auto">
-              {favoritosFiltrados.map((f) => (
-                <button
-                  key={f.id}
-                  onClick={() => handleApply(f)}
-                  className="block w-full truncate rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted/50"
-                >
-                  {f.name}
-                </button>
-              ))}
+    <Card className="lg:col-span-2">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-rose-600" />
+              Flujo de despliegues
+            </CardTitle>
+            <CardDescription>{total} solicitudes · cada una es un cambio en curso</CardDescription>
+          </div>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/solicitudes">
+              Ver todas <ArrowRight className="ml-1 h-3 w-3" />
+            </Link>
+          </Button>
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <form onSubmit={handleSearchSubmit} className="flex flex-1 gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Buscar..."
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                className="pl-9"
+              />
             </div>
+          </form>
+          <Select value={estadoApi || 'all'} onValueChange={(v) => setEstadoApi(v === 'all' ? '' : v)}>
+            <SelectTrigger className="w-[160px]">
+              <SelectValue placeholder="Estado" />
+            </SelectTrigger>
+            <SelectContent>
+              {estadoOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <FlujoFiltros
+            clientes={clientes}
+            value={extra}
+            onChange={setExtra}
+            favoritos={favoritos}
+            onApplyFavorito={applyFavorito}
+          />
+        </div>
+
+        <FlujoFavoriteChips
+          favoritos={favoritos}
+          current={{ estado: estadoApi, cliente: extra.cliente, descripcion: extra.descripcion, dateFrom: extra.dateFrom, dateTo: extra.dateTo }}
+          onApply={applyFavorito}
+          onRemove={removeFavorito}
+          onSaveCurrent={saveCurrentAsFavorito}
+        />
+      </CardHeader>
+
+      <CardContent>
+        {isLoading ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">Cargando...</div>
+        ) : filtradas.length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No hay solicitudes que coincidan.
+          </div>
+        ) : (
+          <div onScroll={handleScroll} className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+            {filtradas.map((s: any) => {
+              const estadoConfig = estadosSolicitud[s.estado] || estadosSolicitud.pendiente_autorizacion;
+              return (
+                <Link
+                  key={s.id}
+                  href={`/solicitudes/${s.id}`}
+                  className="flex items-center justify-between gap-3 rounded-lg border p-3 transition-all hover:bg-muted/50"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{s.numeroSolicitud}</span>
+                      <Badge variant={s.tipo === 'incidente' ? 'destructive' : 'secondary'} className="text-[10px]">
+                        {s.tipo === 'incidente' ? 'Incidente' : 'Requerimiento'}
+                      </Badge>
+                    </div>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {s.cliente} · {s.descripcion}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <span
+                      className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-medium ${estadoConfig.bgColor} ${estadoConfig.color}`}
+                    >
+                      {estadoConfig.label}
+                    </span>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {formatDistanceToNow(new Date(s.updatedAt), { addSuffix: true, locale: es })}
+                    </p>
+                  </div>
+                </Link>
+              );
+            })}
+            {isLoadingMore && (
+              <div className="py-2 text-center text-xs text-muted-foreground">Cargando más...</div>
+            )}
+            {isReachingEnd && filtradas.length > 0 && (
+              <div className="py-2 text-center text-xs text-muted-foreground">No hay más solicitudes.</div>
+            )}
           </div>
         )}
-
-        <div className="space-y-3 p-3">
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Cliente</label>
-            <Select
-              value={value.cliente || 'all'}
-              onValueChange={(v) => onChange({ ...value, cliente: v === 'all' ? '' : v })}
-            >
-              <SelectTrigger className="mt-1.5">
-                <SelectValue placeholder="Todos los clientes" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos los clientes</SelectItem>
-                {clientes.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Descripción</label>
-            <Input
-              className="mt-1.5"
-              placeholder="Buscar en la descripción..."
-              value={value.descripcion}
-              onChange={(e) => onChange({ ...value, descripcion: e.target.value })}
-            />
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Última actividad</label>
-            <div className="mt-1.5 flex items-center gap-2">
-              <Input
-                type="date"
-                value={value.dateFrom}
-                onChange={(e) => onChange({ ...value, dateFrom: e.target.value })}
-              />
-              <span className="text-muted-foreground">–</span>
-              <Input
-                type="date"
-                value={value.dateTo}
-                onChange={(e) => onChange({ ...value, dateTo: e.target.value })}
-              />
-            </div>
-          </div>
-        </div>
-      </PopoverContent>
-    </Popover>
+      </CardContent>
+    </Card>
   );
 }
