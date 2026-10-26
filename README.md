@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/use-auth';
 import { useAppStore } from '@/stores/app-store';
+import { useActividadReciente } from '@/hooks/use-data';
 import { cn } from '@/lib/utils';
 import { ROLES } from '@/lib/constants';
 import {
@@ -31,7 +32,8 @@ type SearchTarget = 'solicitudes' | 'repositorios';
 
 export function Header() {
   const { user, rol, signOut, isAuthenticated } = useAuth();
-  const { sidebarOpen, globalSearch, setGlobalSearch, notifications } = useAppStore();
+  const { sidebarOpen, globalSearch, setGlobalSearch } = useAppStore();
+  const { actividad } = useActividadReciente(5);
   const router = useRouter();
   const [searchTarget, setSearchTarget] = useState<SearchTarget>('solicitudes');
 
@@ -81,32 +83,32 @@ export function Header() {
 
       {/* Right side */}
       <div className="flex items-center gap-4">
-        {/* Notifications */}
+        {/* Notifications: ahora muestra actividad real del sistema, no el
+            arreglo "notifications" del store, que nunca se llena porque
+            nada en el código llama a notify(). */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="relative">
               <Bell className="h-5 w-5" />
-              {notifications.length > 0 && (
+              {actividad.length > 0 && (
                 <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-destructive-foreground">
-                  {notifications.length}
+                  {actividad.length}
                 </span>
               )}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-80">
-            <DropdownMenuLabel>Notificaciones</DropdownMenuLabel>
+            <DropdownMenuLabel>Actividad reciente</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            {notifications.length === 0 ? (
+            {actividad.length === 0 ? (
               <div className="p-4 text-center text-sm text-muted-foreground">
-                No hay notificaciones
+                No hay actividad reciente
               </div>
             ) : (
-              notifications.slice(0, 5).map((notification) => (
-                <DropdownMenuItem key={notification.id} className="flex flex-col items-start gap-1">
-                  <span className="font-medium">{notification.title}</span>
-                  {notification.message && (
-                    <span className="text-xs text-muted-foreground">{notification.message}</span>
-                  )}
+              actividad.slice(0, 5).map((item, idx) => (
+                <DropdownMenuItem key={idx} className="flex flex-col items-start gap-1">
+                  <span className="font-medium">{item.usuario}</span>
+                  <span className="text-xs text-muted-foreground">{item.descripcion}</span>
                 </DropdownMenuItem>
               ))
             )}
