@@ -1,221 +1,157 @@
 'use client';
 
-import { useMemo, useEffect, useState } from 'react';
-import Link from 'next/link';
-import { useSolicitudes } from '@/hooks/use-data';
-import { useFlujoFavoritos } from '@/hooks/use-flujo-favoritos';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/hooks/use-auth';
+import { useAppStore } from '@/stores/app-store';
+import { cn } from '@/lib/utils';
+import { ROLES } from '@/lib/constants';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from '@/components/ui/select';
-import { FileText, Search, ArrowRight } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
-import { es } from 'date-fns/locale';
-import { advancedMatch } from '@/utils/filtered';
-import { FlujoFiltros, type FlujoFiltrosValue } from './flujo-filtros';
-import { FlujoFavoriteChips } from './flujo-favorite-chips';
-import type { FlujoFavorito } from '@/lib/flujo-favorites';
+import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Search, Bell, LogOut, User } from 'lucide-react';
 
-const estadosSolicitud: Record<string, { label: string; color: string; bgColor: string }> = {
-  pendiente_autorizacion: { label: 'Pendiente', color: 'text-gray-700', bgColor: 'bg-gray-100' },
-  en_desarrollo: { label: 'En Desarrollo', color: 'text-blue-700', bgColor: 'bg-blue-100' },
-  en_test: { label: 'En Test', color: 'text-purple-700', bgColor: 'bg-purple-100' },
-  completado: { label: 'Completado', color: 'text-green-700', bgColor: 'bg-green-100' },
-};
+type SearchTarget = 'solicitudes' | 'repositorios';
 
-const estadoOptions = [
-  { value: 'all', label: 'Todos' },
-  { value: 'pendiente_autorizacion', label: 'Pendiente' },
-  { value: 'en_desarrollo', label: 'Desarrollo' },
-  { value: 'en_test', label: 'Test' },
-  { value: 'completado', label: 'Completado' },
-];
+export function Header() {
+  const { user, rol, signOut, isAuthenticated } = useAuth();
+  const { sidebarOpen, globalSearch, setGlobalSearch, notifications } = useAppStore();
+  const router = useRouter();
+  const [searchTarget, setSearchTarget] = useState<SearchTarget>('solicitudes');
 
-export function FlujoDespliegueCard({ refreshSignal }: { refreshSignal: number }) {
-  const [searchInput, setSearchInput] = useState('');
-  const [searchApi, setSearchApi] = useState('');
-  const [estadoApi, setEstadoApi] = useState('');
-  const [extra, setExtra] = useState<FlujoFiltrosValue>({ cliente: '', descripcion: '', dateFrom: '', dateTo: '' });
+  const initials = user?.name
+    ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+    : 'U';
 
-  const { favoritos, save: saveFavorito, remove: removeFavorito } = useFlujoFavoritos();
+  const roleInfo = ROLES[rol];
 
-  const { solicitudes, total, isLoading, isLoadingMore, isReachingEnd, loadMore, refresh } =
-    useSolicitudes(searchApi, estadoApi, '');
-
-  useEffect(() => {
-    if (refreshSignal > 0) refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshSignal]);
-
-  const clientes = useMemo(
-    () => [...new Set(solicitudes.map((s: any) => s.cliente).filter(Boolean))] as string[],
-    [solicitudes],
-  );
-
-  const filtradas = useMemo(() => {
-    const fromTime = extra.dateFrom ? new Date(extra.dateFrom).getTime() : null;
-    const toTime = extra.dateTo ? new Date(extra.dateTo).getTime() + (24 * 60 * 60 * 1000 - 1) : null;
-
-    return solicitudes.filter((s: any) => {
-      const matchesText =
-        !searchInput ||
-        advancedMatch(s.numeroSolicitud || '', searchInput) ||
-        advancedMatch(s.descripcion || '', searchInput);
-      const matchesDescripcion = !extra.descripcion || advancedMatch(s.descripcion || '', extra.descripcion);
-      const matchesCliente = !extra.cliente || s.cliente === extra.cliente;
-      const updatedTime = new Date(s.updatedAt).getTime();
-      const matchesFrom = fromTime === null || updatedTime >= fromTime;
-      const matchesTo = toTime === null || updatedTime <= toTime;
-      return matchesText && matchesDescripcion && matchesCliente && matchesFrom && matchesTo;
-    });
-  }, [solicitudes, searchInput, extra]);
-
-  function handleSearchSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setSearchApi(searchInput.trim());
-  }
-
-  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
-    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-    const nearBottom = scrollTop + clientHeight >= scrollHeight - 50;
-    if (nearBottom && !isLoadingMore && !isReachingEnd) loadMore();
-  }
-
-  function applyFavorito(favorito: FlujoFavorito) {
-    setEstadoApi(favorito.estado);
-    setExtra({ cliente: favorito.cliente, descripcion: favorito.descripcion, dateFrom: favorito.dateFrom, dateTo: favorito.dateTo });
-  }
-
-  function saveCurrentAsFavorito(name: string) {
-    saveFavorito({
-      id: `fav-${Date.now()}`,
-      name,
-      estado: estadoApi,
-      tipo: '',
-      cliente: extra.cliente,
-      descripcion: extra.descripcion,
-      dateFrom: extra.dateFrom,
-      dateTo: extra.dateTo,
-    });
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter' && globalSearch.trim()) {
+      router.push(`/${searchTarget}?search=${encodeURIComponent(globalSearch.trim())}`);
+    }
   }
 
   return (
-    <Card className="lg:col-span-2">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5 text-rose-600" />
-              Flujo de despliegues
-            </CardTitle>
-            <CardDescription>{total} solicitudes · cada una es un cambio en curso</CardDescription>
-          </div>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/solicitudes">
-              Ver todas <ArrowRight className="ml-1 h-3 w-3" />
-            </Link>
-          </Button>
-        </div>
-
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-          <form onSubmit={handleSearchSubmit} className="flex flex-1 gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Buscar..."
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-          </form>
-          <Select value={estadoApi || 'all'} onValueChange={(v) => setEstadoApi(v === 'all' ? '' : v)}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Estado" />
-            </SelectTrigger>
-            <SelectContent>
-              {estadoOptions.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <FlujoFiltros
-            clientes={clientes}
-            value={extra}
-            onChange={setExtra}
-            favoritos={favoritos}
-            onApplyFavorito={applyFavorito}
+    <header
+      className={cn(
+        'fixed top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background px-4 transition-all duration-300',
+        sidebarOpen ? 'left-64' : 'left-16',
+        'right-0'
+      )}
+    >
+      {/* Search */}
+      <div className="flex w-full max-w-lg items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            placeholder={`Buscar ${searchTarget === 'solicitudes' ? 'solicitudes' : 'repositorios'}... (Enter)`}
+            value={globalSearch}
+            onChange={(e) => setGlobalSearch(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            className="pl-9"
           />
         </div>
+        <Select value={searchTarget} onValueChange={(v) => setSearchTarget(v as SearchTarget)}>
+          <SelectTrigger className="w-[150px] shrink-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="solicitudes">Solicitudes</SelectItem>
+            <SelectItem value="repositorios">Repositorios</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
 
-        <FlujoFavoriteChips
-          favoritos={favoritos}
-          current={{ estado: estadoApi, cliente: extra.cliente, descripcion: extra.descripcion, dateFrom: extra.dateFrom, dateTo: extra.dateTo }}
-          onApply={applyFavorito}
-          onRemove={removeFavorito}
-          onSaveCurrent={saveCurrentAsFavorito}
-        />
-      </CardHeader>
+      {/* Right side */}
+      <div className="flex items-center gap-4">
+        {/* Notifications */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="relative">
+              <Bell className="h-5 w-5" />
+              {notifications.length > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-destructive-foreground">
+                  {notifications.length}
+                </span>
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-80">
+            <DropdownMenuLabel>Notificaciones</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {notifications.length === 0 ? (
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                No hay notificaciones
+              </div>
+            ) : (
+              notifications.slice(0, 5).map((notification) => (
+                <DropdownMenuItem key={notification.id} className="flex flex-col items-start gap-1">
+                  <span className="font-medium">{notification.title}</span>
+                  {notification.message && (
+                    <span className="text-xs text-muted-foreground">{notification.message}</span>
+                  )}
+                </DropdownMenuItem>
+              ))
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-      <CardContent>
-        {isLoading ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">Cargando...</div>
-        ) : filtradas.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">
-            No hay solicitudes que coincidan.
-          </div>
-        ) : (
-          <div onScroll={handleScroll} className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-            {filtradas.map((s: any) => {
-              const estadoConfig = estadosSolicitud[s.estado] || estadosSolicitud.pendiente_autorizacion;
-              return (
-                <Link
-                  key={s.id}
-                  href={`/solicitudes/${s.id}`}
-                  className="flex items-center justify-between gap-3 rounded-lg border p-3 transition-all hover:bg-muted/50"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{s.numeroSolicitud}</span>
-                      <Badge variant={s.tipo === 'incidente' ? 'destructive' : 'secondary'} className="text-[10px]">
-                        {s.tipo === 'incidente' ? 'Incidente' : 'Requerimiento'}
-                      </Badge>
-                    </div>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {s.cliente} · {s.descripcion}
-                    </p>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <span
-                      className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-medium ${estadoConfig.bgColor} ${estadoConfig.color}`}
-                    >
-                      {estadoConfig.label}
-                    </span>
-                    <p className="mt-1 text-[10px] text-muted-foreground">
-                      {formatDistanceToNow(new Date(s.updatedAt), { addSuffix: true, locale: es })}
-                    </p>
-                  </div>
-                </Link>
-              );
-            })}
-            {isLoadingMore && (
-              <div className="py-2 text-center text-xs text-muted-foreground">Cargando más...</div>
-            )}
-            {isReachingEnd && filtradas.length > 0 && (
-              <div className="py-2 text-center text-xs text-muted-foreground">No hay más solicitudes.</div>
-            )}
-          </div>
+        {/* User Menu */}
+        {isAuthenticated && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="flex items-center gap-2 px-2">
+                <Avatar className="h-8 w-8">
+                  <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                    {initials}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="hidden flex-col items-start text-left md:flex">
+                  <span className="text-sm font-medium">{user?.name}</span>
+                  <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                    {roleInfo?.label || rol}
+                  </Badge>
+                </div>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel className="font-normal">
+                <div className="flex flex-col space-y-1">
+                  <p className="text-sm font-medium">{user?.name}</p>
+                  <p className="text-xs text-muted-foreground">{user?.email}</p>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem>
+                <User className="mr-2 h-4 w-4" />
+                <span>Mi Perfil</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => signOut()} className="text-destructive">
+                <LogOut className="mr-2 h-4 w-4" />
+                <span>Cerrar Sesion</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </header>
   );
 }
